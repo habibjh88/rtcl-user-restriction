@@ -41,18 +41,22 @@ class RtclUserRestriction {
 		add_filter( 'post_row_actions', [ $this, 'prevent_user_actions' ], 10, 2 );
 		add_filter( 'page_row_actions', [ $this, 'prevent_user_actions' ], 10, 2 );
 		add_filter( 'wp_handle_upload_prefilter', [ $this, 'block_user_file_upload' ] );
-		add_action( 'admin_footer', [ $this, 'myplugin_disable_media_uploader_for_user' ] );
+		add_action( 'admin_footer', [ $this, 'disable_media_uploader_for_user' ] );
 		add_action( 'admin_init', [ $this, 'register_user_select_setting' ] );
+		add_filter( 'rtcl_account_default_menu_items', [ $this, 'my_account_endpoint_modify' ] );
+		add_filter( 'rtcl_my_account_endpoint', [ $this, 'my_account_endpoint_modify' ] );
+		add_filter( 'woocommerce_account_menu_items', [ $this, 'my_account_endpoint_modify' ] );
+		add_action( 'wp', [ $this, 'woo_redirect_forbidden_access' ] );
 	}
 
 	public function set_user_id() {
 		$this->userId = get_option( 'rtcl__selected_user' ) ?? 0;
-		add_filter( 'upload_dir', [ $this, 'myplugin_prevent_programmatic_uploads_for_user' ] );
+		add_filter( 'upload_dir', [ $this, 'prevent_programmatic_uploads_for_user' ] );
 	}
 
-	public function check_if_wp_admin_is_last($url) {
+	public function check_if_wp_admin_is_last( $url ) {
 		// Check if the URL ends with '/wp-admin'
-		return ! preg_match('#/wp-admin/?$#', $url);
+		return ! preg_match( '#/wp-admin/?$#', $url );
 	}
 
 	public function check_post_type_redirect() {
@@ -81,7 +85,7 @@ class RtclUserRestriction {
 		}
 
 		// Check if the user ID matches.
-		if ( $current_user->ID == $this->userId && 'edit' !== $action && $this->check_if_wp_admin_is_last($serverRequest) ) {
+		if ( $current_user->ID == $this->userId && 'edit' !== $action && $this->check_if_wp_admin_is_last( $serverRequest ) ) {
 			if ( ! isset( $_GET['post_type'] ) || ! in_array( $_GET['post_type'], $rtcl_tables ) ) {
 				wp_redirect( home_url() );
 				exit;
@@ -167,7 +171,7 @@ class RtclUserRestriction {
 		return $file;
 	}
 
-	public function myplugin_prevent_programmatic_uploads_for_user( $upload_dir ) {
+	public function prevent_programmatic_uploads_for_user( $upload_dir ) {
 		// Get the current logged-in user
 		$current_user = wp_get_current_user();
 
@@ -180,7 +184,7 @@ class RtclUserRestriction {
 		return $upload_dir;
 	}
 
-	function myplugin_disable_media_uploader_for_user() {
+	function disable_media_uploader_for_user() {
 		// Get the current logged-in user
 		$current_user = wp_get_current_user();
 
@@ -238,11 +242,27 @@ class RtclUserRestriction {
 		// Loop through users and create an option for each one
 		foreach ( $users as $user ) {
 			echo '<option value="' . esc_attr( $user->ID ) . '" ' . selected( $selected_user, $user->ID, false ) . '>';
-			echo esc_html( $user->display_name );
+			echo esc_html( $user->display_name ) . ' - ' . $user->ID;
 			echo '</option>';
 		}
 
 		echo '</select>';
+	}
+
+	public function my_account_endpoint_modify( $endpoints ) {
+		unset( $endpoints['edit-account'] );
+
+		return $endpoints;
+	}
+
+	public function woo_redirect_forbidden_access() {
+		if( ! class_exists('WooCommerce')){
+			return;
+		}
+		$current_endpoint = WC()->query->get_current_endpoint();
+		if ( 'edit-account' == $current_endpoint ) {
+			wp_redirect( wc_get_account_endpoint_url( 'dashboard' ) );
+		}
 	}
 }
 
