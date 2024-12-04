@@ -18,140 +18,233 @@ if ( ! defined( 'ABSPATH' ) ) {
 
 use Rtcl\Models\Roles;
 
-function check_post_type_redirect() {
-	// Check if we're on the edit-tags page and the post_type is not 'rtcl_listing'
-	if (wp_doing_ajax()) {
-		return; // Exit the function if it's an AJAX request
+
+/**
+ * Class RtclUserRestriction
+ */
+class RtclUserRestriction {
+	/**
+	 * User ID
+	 * @var int
+	 */
+	public $userId;
+
+	/**
+	 * Class constructor
+	 */
+	public function __construct() {
+		add_action( 'init', [ $this, 'set_user_id' ] );
+		add_action( 'admin_init', [ $this, 'check_post_type_redirect' ], 100 );
+		add_action( 'admin_init', [ $this, 'add_custom_capabilities_to_user' ] );
+		add_action( 'admin_menu', [ $this, 'restrict_menu_access' ], 999 );
+		add_action( 'admin_menu', [ $this, 'hide_upload_menu' ], 999 );
+		add_filter( 'post_row_actions', [ $this, 'prevent_user_actions' ], 10, 2 );
+		add_filter( 'page_row_actions', [ $this, 'prevent_user_actions' ], 10, 2 );
+		add_filter( 'wp_handle_upload_prefilter', [ $this, 'block_user_file_upload' ] );
+		add_action( 'admin_footer', [ $this, 'myplugin_disable_media_uploader_for_user' ] );
+		add_action( 'admin_init', [ $this, 'register_user_select_setting' ] );
 	}
-	$current_user = wp_get_current_user();
-	$rtcl_tables = [
-		'rtcl_listing',
-		'rtcl_cfg',
-		'rtcl_cf',
-		'rtcl_payment',
-		'rtcl_pricing',
-		'store',
-		'rtcl_agent'
-	];
 
+	public function set_user_id() {
+		$this->userId = get_option( 'rtcl__selected_user' ) ?? 0;
+		add_filter( 'upload_dir', [ $this, 'myplugin_prevent_programmatic_uploads_for_user' ] );
+	}
 
-	$action = $_GET['action'] ?? '';
-	// Check if the user ID matches.
-	if ( $current_user->ID === 16 && 'edit' !== $action ) {
-		if ( ! isset( $_GET['post_type'] ) || ! in_array( $_GET['post_type'], $rtcl_tables ) ) {
-			wp_redirect( home_url( 'wp-admin/edit.php?post_type=rtcl_listing' ) );
-			exit;
+	public function check_if_wp_admin_is_last($url) {
+		// Check if the URL ends with '/wp-admin'
+		return ! preg_match('#/wp-admin/?$#', $url);
+	}
+
+	public function check_post_type_redirect() {
+		if ( wp_doing_ajax() ) {
+			return;
 		}
-	}
-}
-
-add_action( 'admin_init', 'check_post_type_redirect', 100 );
 
 
-function add_custom_capabilities_to_user_16() {
-	$user_id = 16;
-	$user    = new WP_User( $user_id );
+		$current_user = wp_get_current_user();
+		$rtcl_tables  = [
+			'rtcl_listing',
+			'rtcl_cfg',
+			'rtcl_cf',
+			'rtcl_payment',
+			'rtcl_pricing',
+			'store',
+			'rtcl_agent'
+		];
 
-	if ( $user ) {
-		// Define the capabilities to add
-		$capabilities = Roles::get_core_caps();
+		$serverRequest = $_SERVER['REQUEST_URI'] ?? '';
+		$action        = $_GET['action'] ?? '';
 
-		foreach ( $capabilities as $cap_group ) {
-			foreach ( $cap_group as $cap ) {
-				$user->add_cap( $cap );
+
+		if ( strpos( $serverRequest, 'wp-admin' ) === false ) {
+			return;
+		}
+
+		// Check if the user ID matches.
+		if ( $current_user->ID == $this->userId && 'edit' !== $action && $this->check_if_wp_admin_is_last($serverRequest) ) {
+			if ( ! isset( $_GET['post_type'] ) || ! in_array( $_GET['post_type'], $rtcl_tables ) ) {
+				wp_redirect( home_url() );
+				exit;
 			}
 		}
 	}
 
-	if ( $user->has_cap( 'upload_files' ) ) {
-		$user->remove_cap( 'upload_files' );
-	}
 
+	public function add_custom_capabilities_to_user() {
+		$user = new WP_User( $this->userId );
 
-}
+		if ( $user ) {
+			// Define the capabilities to add
+			$capabilities = Roles::get_core_caps();
 
-// Hook to run on 'admin_init' or whenever needed
-add_action( 'admin_init', 'add_custom_capabilities_to_user_16' );
-
-
-/*function custom_limit_user_capabilities( $all_caps, $cap, $args, $user ) {
-	// Restrict actions for the user with ID 16.
-	if (  $user->ID === 16 ) {
-		$all_caps['upload_files']                = false;
-	}
-
-	return $all_caps;
-}*/
-
-//add_filter( 'user_has_cap', 'custom_limit_user_capabilities', 10, 4 );
-
-
-/*$GLOBALS['testsdf'] =1;
-if(1 === $GLOBALS['testsdf']){
-	error_log( print_r( $all_caps, true ) . "\n", 3, __DIR__ . '/log.txt' );
-}
-$GLOBALS['testsdf'] = 2;*/
-
-function restrict_menu_access() {
-	$current_user = wp_get_current_user();
-
-	// Check if the user ID matches.
-	if ( $current_user->ID === 16 ) {
-		global $menu, $submenu;
-
-		// Allowed menu slug and submenus.
-		$allowed_menu = 'edit.php?post_type=rtcl_listing';
-
-		foreach ( $menu as $key => $value ) {
-			if ( $value[2] !== $allowed_menu ) {
-				unset( $menu[ $key ] );
+			foreach ( $capabilities as $cap_group ) {
+				foreach ( $cap_group as $cap ) {
+					$user->add_cap( $cap );
+				}
 			}
 		}
 
-		foreach ( $submenu as $parent_slug => $submenus ) {
-			if ( $parent_slug !== $allowed_menu ) {
-				unset( $submenu[ $parent_slug ] );
+		if ( $user->has_cap( 'upload_files' ) ) {
+			$user->remove_cap( 'upload_files' );
+		}
+	}
+
+	public function restrict_menu_access() {
+		$current_user = wp_get_current_user();
+
+		// Check if the user ID matches.
+		if ( $current_user->ID == $this->userId ) {
+			global $menu, $submenu;
+
+			// Allowed menu slug and submenus.
+			$allowed_menu = 'edit.php?post_type=rtcl_listing';
+
+			foreach ( $menu as $key => $value ) {
+				if ( $value[2] !== $allowed_menu ) {
+					unset( $menu[ $key ] );
+				}
+			}
+
+			foreach ( $submenu as $parent_slug => $submenus ) {
+				if ( $parent_slug !== $allowed_menu ) {
+					unset( $submenu[ $parent_slug ] );
+				}
 			}
 		}
 	}
-}
 
-add_action( 'admin_menu', 'restrict_menu_access', 999 );
 
-function prevent_user_actions( $actions, $post ) {
-	$current_user = wp_get_current_user();
+	public function prevent_user_actions( $actions, $post ) {
+		$current_user = wp_get_current_user();
 
-	// Prevent actions for the user.
-	if ( $current_user->ID === 16 ) {
-		// Clear the edit and delete actions.
-		unset( $actions['edit'] );
-		unset( $actions['trash'] );
+		// Prevent actions for the user.
+		if ( $current_user->ID == $this->userId ) {
+			// Clear the edit and delete actions.
+			unset( $actions['edit'] );
+			unset( $actions['trash'] );
+		}
+
+		return $actions;
 	}
 
-	return $actions;
-}
 
-add_filter( 'post_row_actions', 'prevent_user_actions', 10, 2 );
-add_filter( 'page_row_actions', 'prevent_user_actions', 10, 2 );
+	public function hide_upload_menu() {
+		$current_user = wp_get_current_user();
 
-function hide_upload_menu() {
-	$current_user = wp_get_current_user();
+		if ( $current_user->ID == $this->userId ) {
+			remove_menu_page( 'upload.php' );
+		}
+	}
 
-	if ( $current_user->ID === 16 ) {
-		remove_menu_page( 'upload.php' ); // Removes "Media" menu.
+
+	public function block_user_file_upload( $file ) {
+		$current_user = wp_get_current_user();
+
+		if ( $current_user->ID == $this->userId ) {
+			wp_die( __( 'You are not allowed to upload files.' ) );
+		}
+
+		return $file;
+	}
+
+	public function myplugin_prevent_programmatic_uploads_for_user( $upload_dir ) {
+		// Get the current logged-in user
+		$current_user = wp_get_current_user();
+
+		// Check if the current user's ID is 16
+		if ( $current_user->ID == $this->userId ) {
+			// Block the upload by setting an error
+			$upload_dir['error'] = 'You are not allowed to upload files.';
+		}
+
+		return $upload_dir;
+	}
+
+	function myplugin_disable_media_uploader_for_user() {
+		// Get the current logged-in user
+		$current_user = wp_get_current_user();
+
+		// Check if the current user's ID is 16
+		if ( $current_user->ID == $this->userId ) {
+			// Disable the media uploader via JavaScript
+			echo '<script type="text/javascript">
+            jQuery(document).ready(function($) {
+                // Disable the Media Uploader buttons
+                $(".media-button").prop("disabled", true);
+                $(".media-frame").on("open", function() {
+                    return false; // Prevent Media Uploader from opening
+                });
+            });
+        </script>';
+		}
+	}
+
+	function register_user_select_setting() {
+		// Register the setting
+		register_setting(
+			'general',
+			'rtcl__selected_user',
+			'sanitize_text_field'
+		);
+
+		// Add the setting section and field to the General Settings page
+		add_settings_section(
+			'user_select_section',
+			'Select a User',
+			null,
+			'general'
+		);
+
+		add_settings_field(
+			'rtcl__selected_user_field',
+			'Choose a User for Restriction',
+			[ $this, 'user_select_dropdown' ],
+			'general',
+			'user_select_section'
+		);
+	}
+
+	function user_select_dropdown() {
+		// Get the list of users
+		$users = get_users();
+
+		// Get the currently selected user from options
+		$selected_user = get_option( 'rtcl__selected_user' );
+
+		// Start the select dropdown
+		echo '<select name="rtcl__selected_user" id="rtcl__selected_user">';
+		echo '<option value="">Select a user</option>';
+
+		// Loop through users and create an option for each one
+		foreach ( $users as $user ) {
+			echo '<option value="' . esc_attr( $user->ID ) . '" ' . selected( $selected_user, $user->ID, false ) . '>';
+			echo esc_html( $user->display_name );
+			echo '</option>';
+		}
+
+		echo '</select>';
 	}
 }
 
-add_action( 'admin_menu', 'hide_upload_menu', 999 );
 
-function block_user_file_upload( $file ) {
-	$current_user = wp_get_current_user();
-
-	if ( $current_user->ID === 16 ) {
-		wp_die( __( 'You are not allowed to upload files.' ) );
-	}
-
-	return $file;
-}
-
-add_filter( 'wp_handle_upload_prefilter', 'block_user_file_upload' );
+new RtclUserRestriction();
