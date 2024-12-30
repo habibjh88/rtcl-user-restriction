@@ -33,7 +33,7 @@ class RtclUserRestriction {
 	 * Class constructor
 	 */
 	public function __construct() {
-		add_action( 'init', [ $this, 'set_user_id' ] );
+		add_action( 'init', [ $this, '_init' ] );
 		add_action( 'admin_init', [ $this, 'check_post_type_redirect' ], 100 );
 		add_action( 'admin_init', [ $this, 'add_custom_capabilities_to_user' ] );
 		add_action( 'admin_menu', [ $this, 'restrict_menu_access' ], 999 );
@@ -47,11 +47,12 @@ class RtclUserRestriction {
 		add_filter( 'rtcl_my_account_endpoint', [ $this, 'my_account_endpoint_modify' ] );
 		add_filter( 'woocommerce_account_menu_items', [ $this, 'my_account_endpoint_modify' ] );
 		add_action( 'wp', [ $this, 'woo_redirect_forbidden_access' ] );
+		add_action( 'admin_bar_menu', [ $this, 'customize_my_wp_admin_bar' ], 9999 );
+
 	}
 
-	public function set_user_id() {
+	public function _init() {
 		$this->userId = get_option( 'rtcl__selected_user' ) ?? 0;
-		add_filter( 'upload_dir', [ $this, 'prevent_programmatic_uploads_for_user' ] );
 	}
 
 	public function check_if_wp_admin_is_last( $url ) {
@@ -65,8 +66,8 @@ class RtclUserRestriction {
 		}
 
 
-		$current_user = wp_get_current_user();
-		$rtcl_tables  = [
+		$current_user    = wp_get_current_user();
+		$rtcl_post_types = [
 			'rtcl_listing',
 			'rtcl_cfg',
 			'rtcl_cf',
@@ -78,7 +79,13 @@ class RtclUserRestriction {
 
 		$serverRequest = $_SERVER['REQUEST_URI'] ?? '';
 		$action        = $_GET['action'] ?? '';
+		$postType      = ! empty( $_GET['post'] ) ? get_post_type( $_GET['post'] ) : '';
 
+
+		if ( $action == 'edit' && ! in_array( $postType, $rtcl_post_types ) ) {
+			wp_redirect( home_url() );
+			exit;
+		}
 
 		if ( strpos( $serverRequest, 'wp-admin' ) === false ) {
 			return;
@@ -86,7 +93,7 @@ class RtclUserRestriction {
 
 		// Check if the user ID matches.
 		if ( $current_user->ID == $this->userId && 'edit' !== $action && $this->check_if_wp_admin_is_last( $serverRequest ) ) {
-			if ( ! isset( $_GET['post_type'] ) || ! in_array( $_GET['post_type'], $rtcl_tables ) ) {
+			if ( ! isset( $_GET['post_type'] ) || ! in_array( $_GET['post_type'], $rtcl_post_types ) ) {
 				wp_redirect( home_url() );
 				exit;
 			}
@@ -175,6 +182,8 @@ class RtclUserRestriction {
 		// Get the current logged-in user
 		$current_user = wp_get_current_user();
 
+		error_log( print_r( $upload_dir, true ) . "\n", 3, __DIR__ . '/log.txt' );
+
 		// Check if the current user's ID is 16
 		if ( $current_user->ID == $this->userId ) {
 			// Block the upload by setting an error
@@ -256,13 +265,26 @@ class RtclUserRestriction {
 	}
 
 	public function woo_redirect_forbidden_access() {
-		if( ! class_exists('WooCommerce')){
+		if ( ! class_exists( 'WooCommerce' ) ) {
 			return;
 		}
 		$current_endpoint = WC()->query->get_current_endpoint();
 		if ( 'edit-account' == $current_endpoint ) {
 			wp_redirect( wc_get_account_endpoint_url( 'dashboard' ) );
 		}
+	}
+
+	public function customize_my_wp_admin_bar( $wp_admin_bar ) {
+		$current_user = wp_get_current_user();
+		// Check if the user ID matches.
+		if ( $current_user->ID == $this->userId ) {
+			// Check if the current user has permission to edit pages
+			$wp_admin_bar->remove_node( 'edit' );
+			$wp_admin_bar->remove_node( 'new-content' );
+			$wp_admin_bar->remove_node( 'elementor_edit_page' );
+			$wp_admin_bar->remove_node( 'customize' );
+		}
+
 	}
 }
 
